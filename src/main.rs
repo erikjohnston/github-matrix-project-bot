@@ -80,7 +80,7 @@ impl PendingReviewChecker {
                 "title": "In Review Column",
                 "value": review_column_count,
                 "severity": "normal",
-                "link": "https://github.com/orgs/matrix-org/projects/8",
+                "link": "https://github.com/orgs/matrix-org/projects/8#column-6476200",
             }))
             .send().await?;
 
