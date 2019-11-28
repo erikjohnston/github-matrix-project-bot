@@ -5,9 +5,7 @@ extern crate serde_derive;
 
 use std::time::Duration;
 
-use actix::{Actor, AsyncContext};
-use actix_web::{server, App};
-use futures::Future;
+extern crate tokio;
 
 const GH_TOKEN: &str = include_str!("../gh.token");
 const MX_TOKEN: &str = include_str!("../mx.token");
@@ -19,92 +17,118 @@ struct GithubSearchResult {
 
 #[derive(Debug, Clone)]
 struct PendingReviewChecker {
-    client: reqwest::r#async::Client,
+    client: reqwest::Client,
 }
 
 impl PendingReviewChecker {
     pub fn new() -> PendingReviewChecker {
         PendingReviewChecker {
-            client: reqwest::r#async::Client::new(),
+            client: reqwest::Client::new(),
         }
     }
 
-    fn get_review_count(
-        &self,
-    ) -> impl Future<Item = i64, Error = Box<dyn std::error::Error + 'static>> {
-        self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
+    async fn get_review_count(&self) -> Result<i64, Box<dyn std::error::Error + 'static>> {
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
             .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
-            .send()
-            .and_then(|mut resp| resp.json())
-            .map(|search: GithubSearchResult| {
-                search.total_count
-            })
-            .map_err(|e| e.into())
+            .send().await?;
+
+        let search: GithubSearchResult = resp.json().await?;
+
+        Ok(search.total_count)
     }
 
-    fn update_state(
-        &self,
-        counter: i64,
-    ) -> impl Future<Item = (), Error = Box<dyn std::error::Error + 'static>> {
-        let severity = if counter > 0 { "warning" } else { "normal" };
+    async fn get_review_column_count(&self) -> Result<i64, Box<dyn std::error::Error + 'static>> {
+        let resp = self
+            .client
+            .get("https://api.github.com/projects/columns/6476200/cards")
+            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send()
+            .await?;
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!GebUmESDHVsWJQSBSX:jki.re/state/re.jki.counter/gh_reviews")
+        let resp: serde_json::Value = resp.json().await?;
+
+        let cards: Vec<serde_json::Value> = serde_json::from_value(resp)?;
+
+        Ok(cards.len() as i64)
+    }
+
+    async fn update_state(
+        &self,
+        review_count: i64,
+        review_column_count: i64,
+    ) -> Result<(), Box<dyn std::error::Error + 'static>> {
+        let severity = if review_count > 0 {
+            "warning"
+        } else {
+            "normal"
+        };
+
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_reviews")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
                 "title": "Pending reviews",
-                "value": counter,
+                "value": review_count,
                 "severity": severity,
                 "link": "https://github.com/pulls/review-requested",
             }))
-            .send()
-            .map(|_resp| ())
-            .map_err(|e| e.into())
+            .send().await?;
+
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_review_column")
+            .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
+            .json(&json!({
+                "title": "In Review Column",
+                "value": review_column_count,
+                "severity": "normal",
+                "link": "https://github.com/orgs/matrix-org/projects/8",
+            }))
+            .send().await?;
+
+        Ok(())
     }
 
-    pub fn do_check(&self) -> impl Future<Item = (), Error = ()> {
-        let self_clone = self.clone();
+    async fn do_check_inner(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
+        let review_count = self.get_review_count().await?;
+        let review_column_count = self.get_review_column_count().await?;
+        self.update_state(review_count, review_column_count).await?;
 
-        self.get_review_count()
-            .and_then(move |count| {
-                println!("There are {} pending reviews", count);
-
-                self_clone.update_state(count)
-            })
-            .map_err(|err| {
-                eprintln!("Error: {}", err);
-            })
+        Ok(())
     }
-}
 
-impl Actor for PendingReviewChecker {
-    type Context = actix::Context<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        actix::spawn(self.do_check().or_else(|_| Ok(())));
-
-        let c = self.clone();
-        ctx.run_interval(Duration::from_secs(30), move |_, _| {
-            actix::spawn(c.do_check().or_else(|_| Ok(())))
-        });
+    pub async fn do_check(&self) {
+        match self.do_check_inner().await {
+            Ok(()) => {}
+            Err(err) => panic!("Error: {}", err),
+        }
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), std::io::Error> {
     let checker = PendingReviewChecker::new();
-    checker.clone().start();
 
-    server::new(move || {
-        App::with_state(checker.clone()).resource("/", |r| {
-            r.f(move |req| {
-                tokio::spawn(req.state().do_check());
+    let c = checker.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio_timer::Interval::new_interval(Duration::from_secs(30));
+        loop {
+            c.do_check().await;
+            interval.next().await;
+        }
+    });
 
-                "Done"
-            })
-        })
-    })
-    .shutdown_timeout(10)
-    .workers(1)
-    .bind("127.0.0.1:8088")
-    .unwrap()
-    .run();
+    let make_service = hyper::service::make_service_fn(|_| {
+        async {
+            Ok::<_, hyper::Error>(hyper::service::service_fn(|_req| {
+                async { Ok::<_, hyper::Error>(hyper::Response::new(hyper::Body::from("Done"))) }
+            }))
+        }
+    });
+
+    // Then bind and serve...
+    hyper::Server::bind(&"127.0.0.1:8080".parse().unwrap())
+        .serve(make_service)
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+    Ok(())
 }
