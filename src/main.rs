@@ -31,7 +31,7 @@ impl PendingReviewChecker {
 
     fn get_review_count(
         &self,
-    ) -> impl Future<Item = i64, Error = Box<std::error::Error + 'static>> {
+    ) -> impl Future<Item = i64, Error = Box<dyn std::error::Error + 'static>> {
         self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
             .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
             .send()
@@ -45,7 +45,7 @@ impl PendingReviewChecker {
     fn update_state(
         &self,
         counter: i64,
-    ) -> impl Future<Item = (), Error = Box<std::error::Error + 'static>> {
+    ) -> impl Future<Item = (), Error = Box<dyn std::error::Error + 'static>> {
         let severity = if counter > 0 { "warning" } else { "normal" };
 
         self.client.put("https://jki.re/_matrix/client/r0/rooms/!GebUmESDHVsWJQSBSX:jki.re/state/re.jki.counter/gh_reviews")
