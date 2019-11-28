@@ -90,6 +90,12 @@ impl PendingReviewChecker {
     async fn do_check_inner(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let review_count = self.get_review_count().await?;
         let review_column_count = self.get_review_column_count().await?;
+
+        println!(
+            "There are {} pending reviews and {} in review column",
+            review_count, review_column_count
+        );
+
         self.update_state(review_count, review_column_count).await?;
 
         Ok(())
