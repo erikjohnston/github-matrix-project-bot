@@ -53,10 +53,29 @@ impl PendingReviewChecker {
         Ok(cards.len() as i64)
     }
 
+    async fn get_in_progress_column_count(
+        &self,
+    ) -> Result<i64, Box<dyn std::error::Error + 'static>> {
+        let resp = self
+            .client
+            .get("https://api.github.com/projects/columns/4179915/cards")
+            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send()
+            .await?;
+
+        let resp: serde_json::Value = resp.json().await?;
+
+        let cards: Vec<serde_json::Value> = serde_json::from_value(resp)?;
+
+        Ok(cards.len() as i64)
+    }
+
     async fn update_state(
         &self,
         review_count: i64,
         review_column_count: i64,
+        in_progress_column_count: i64,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let severity = if review_count > 0 {
             "warning"
@@ -84,19 +103,31 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_total_wip")
+            .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
+            .json(&json!({
+                "title": "Total Work In Progress",
+                "value": review_column_count + in_progress_column_count,
+                "severity": "normal",
+                "link": "https://github.com/orgs/matrix-org/projects/8#column-4179915",
+            }))
+            .send().await?;
+
         Ok(())
     }
 
     async fn do_check_inner(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let review_count = self.get_review_count().await?;
         let review_column_count = self.get_review_column_count().await?;
+        let in_progress_column_count = self.get_in_progress_column_count().await?;
 
         println!(
             "There are {} pending reviews and {} in review column",
             review_count, review_column_count
         );
 
-        self.update_state(review_count, review_column_count).await?;
+        self.update_state(review_count, review_column_count, in_progress_column_count)
+            .await?;
 
         Ok(())
     }
