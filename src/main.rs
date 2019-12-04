@@ -153,10 +153,16 @@ async fn main() -> Result<(), std::io::Error> {
         }
     });
 
-    let make_service = hyper::service::make_service_fn(|_| {
-        async {
-            Ok::<_, hyper::Error>(hyper::service::service_fn(|_req| {
-                async { Ok::<_, hyper::Error>(hyper::Response::new(hyper::Body::from("Done"))) }
+    let make_service = hyper::service::make_service_fn(move |_| {
+        let checker = checker.clone();
+        async move {
+            Ok::<_, hyper::Error>(hyper::service::service_fn(move |_req| {
+                let checker = checker.clone();
+                async move {
+                    tokio_timer::delay_for(Duration::from_secs(3)).await;
+                    checker.do_check().await;
+                    Ok::<_, hyper::Error>(hyper::Response::new(hyper::Body::from("Done")))
+                }
             }))
         }
     });
