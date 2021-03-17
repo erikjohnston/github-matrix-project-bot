@@ -5,7 +5,7 @@ extern crate serde_derive;
 
 use std::time::Duration;
 
-extern crate tokio;
+use anyhow::{bail, Error};
 
 const GH_TOKEN: &str = include_str!("../gh.token");
 const MX_TOKEN: &str = include_str!("../mx.token");
@@ -27,24 +27,39 @@ impl PendingReviewChecker {
         }
     }
 
-    async fn get_review_count(&self) -> Result<i64, Box<dyn std::error::Error + 'static>> {
+    async fn get_review_count(&self) -> Result<i64, Error> {
         let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
             .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .header("User-Agent", "github-project-bot")
             .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
 
         let search: GithubSearchResult = resp.json().await?;
 
         Ok(search.total_count)
     }
 
-    async fn get_ps_column_count(&self) -> Result<i64, Box<dyn std::error::Error + 'static>> {
+    async fn get_ps_column_count(&self) -> Result<i64, Error> {
         let resp = self
             .client
             .get("https://api.github.com/projects/columns/13411398/cards")
             .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
             .header("Accept", "application/vnd.github.inertia-preview+json")
+            .header("User-Agent", "github-project-bot")
             .send()
             .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
 
         let resp: serde_json::Value = resp.json().await?;
 
@@ -53,11 +68,7 @@ impl PendingReviewChecker {
         Ok(cards.len() as i64)
     }
 
-    async fn update_state(
-        &self,
-        review_count: i64,
-        ps_column_count: i64,
-    ) -> Result<(), Box<dyn std::error::Error + 'static>> {
+    async fn update_state(&self, review_count: i64, ps_column_count: i64) -> Result<(), Error> {
         let severity = if review_count > 0 {
             "warning"
         } else {
@@ -74,7 +85,7 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!oBWlVutBAdQYcYUsAc:sw1v.org/state/re.jki.counter/gh_review_column")
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!oBWlVutBAdQYcYUsAc:sw1v.org/state/re.jki.counter/gh_ps_asks")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
                 "title": "Urgent PS Tasks Column",
@@ -87,7 +98,7 @@ impl PendingReviewChecker {
         Ok(())
     }
 
-    async fn do_check_inner(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
+    async fn do_check_inner(&self) -> Result<(), Error> {
         let review_count = self.get_review_count().await?;
         let ps_column_count = self.get_ps_column_count().await?;
 
@@ -96,17 +107,13 @@ impl PendingReviewChecker {
             review_count, ps_column_count
         );
 
-        self.update_state(review_count, ps_column_count)
-            .await?;
+        self.update_state(review_count, ps_column_count).await?;
 
         Ok(())
     }
 
     pub async fn do_check(&self) {
-        match self.do_check_inner().await {
-            Ok(()) => {}
-            Err(err) => panic!("Error: {}", err),
-        }
+        self.do_check_inner().await.unwrap()
     }
 }
 
