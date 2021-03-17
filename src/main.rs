@@ -37,28 +37,10 @@ impl PendingReviewChecker {
         Ok(search.total_count)
     }
 
-    async fn get_review_column_count(&self) -> Result<i64, Box<dyn std::error::Error + 'static>> {
+    async fn get_ps_column_count(&self) -> Result<i64, Box<dyn std::error::Error + 'static>> {
         let resp = self
             .client
-            .get("https://api.github.com/projects/columns/6476200/cards")
-            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
-            .send()
-            .await?;
-
-        let resp: serde_json::Value = resp.json().await?;
-
-        let cards: Vec<serde_json::Value> = serde_json::from_value(resp)?;
-
-        Ok(cards.len() as i64)
-    }
-
-    async fn get_in_progress_column_count(
-        &self,
-    ) -> Result<i64, Box<dyn std::error::Error + 'static>> {
-        let resp = self
-            .client
-            .get("https://api.github.com/projects/columns/4179915/cards")
+            .get("https://api.github.com/projects/columns/13411398/cards")
             .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send()
@@ -74,8 +56,7 @@ impl PendingReviewChecker {
     async fn update_state(
         &self,
         review_count: i64,
-        review_column_count: i64,
-        in_progress_column_count: i64,
+        ps_column_count: i64,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let severity = if review_count > 0 {
             "warning"
@@ -96,20 +77,10 @@ impl PendingReviewChecker {
         self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_review_column")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
-                "title": "In Review Column",
-                "value": review_column_count,
-                "severity": "normal",
-                "link": "https://github.com/orgs/matrix-org/projects/8#column-6476200",
-            }))
-            .send().await?;
-
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_total_wip")
-            .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
-            .json(&json!({
-                "title": "Total Work In Progress",
-                "value": review_column_count + in_progress_column_count,
-                "severity": "normal",
-                "link": "https://github.com/orgs/matrix-org/projects/8#column-4179915",
+                "title": "Urgent PS Tasks Column",
+                "value": ps_column_count,
+                "severity": if ps_column_count > 0 {"warning"} else { "normal"},
+                "link": "https://github.com/orgs/matrix-org/projects/36#column-13411398",
             }))
             .send().await?;
 
@@ -118,15 +89,14 @@ impl PendingReviewChecker {
 
     async fn do_check_inner(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let review_count = self.get_review_count().await?;
-        let review_column_count = self.get_review_column_count().await?;
-        let in_progress_column_count = self.get_in_progress_column_count().await?;
+        let ps_column_count = self.get_ps_column_count().await?;
 
         println!(
-            "There are {} pending reviews and {} in review column",
-            review_count, review_column_count
+            "There are {} pending reviews and {} in ps column",
+            review_count, ps_column_count
         );
 
-        self.update_state(review_count, review_column_count, in_progress_column_count)
+        self.update_state(review_count, ps_column_count)
             .await?;
 
         Ok(())
@@ -146,10 +116,10 @@ async fn main() -> Result<(), std::io::Error> {
 
     let c = checker.clone();
     tokio::spawn(async move {
-        let mut interval = tokio_timer::Interval::new_interval(Duration::from_secs(30));
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             c.do_check().await;
-            interval.next().await;
+            interval.tick().await;
         }
     });
 
@@ -159,7 +129,7 @@ async fn main() -> Result<(), std::io::Error> {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |_req| {
                 let checker = checker.clone();
                 async move {
-                    tokio_timer::delay_for(Duration::from_secs(3)).await;
+                    tokio::time::sleep(Duration::from_secs(3)).await;
                     checker.do_check().await;
                     Ok::<_, hyper::Error>(hyper::Response::new(hyper::Body::from("Done")))
                 }
