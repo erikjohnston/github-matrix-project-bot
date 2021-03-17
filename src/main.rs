@@ -64,7 +64,7 @@ impl PendingReviewChecker {
             "normal"
         };
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_reviews")
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!oBWlVutBAdQYcYUsAc:sw1v.org/state/re.jki.counter/gh_reviews")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
                 "title": "Pending reviews",
@@ -74,7 +74,7 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!zVpPeWAObqutioiNzB:jki.re/state/re.jki.counter/gh_review_column")
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!oBWlVutBAdQYcYUsAc:sw1v.org/state/re.jki.counter/gh_review_column")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
                 "title": "Urgent PS Tasks Column",
@@ -138,7 +138,7 @@ async fn main() -> Result<(), std::io::Error> {
     });
 
     // Then bind and serve...
-    hyper::Server::bind(&"127.0.0.1:8080".parse().unwrap())
+    hyper::Server::bind(&"127.0.0.1:8088".parse().unwrap())
         .serve(make_service)
         .await
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
