@@ -75,7 +75,7 @@ impl PendingReviewChecker {
             "normal"
         };
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!oBWlVutBAdQYcYUsAc:sw1v.org/state/re.jki.counter/gh_reviews")
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_reviews")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
                 "title": "Pending reviews",
@@ -85,7 +85,7 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!oBWlVutBAdQYcYUsAc:sw1v.org/state/re.jki.counter/gh_ps_asks")
+        self.client.put("https://jki.re/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks")
             .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
             .json(&json!({
                 "title": "Urgent PS Tasks Column",
