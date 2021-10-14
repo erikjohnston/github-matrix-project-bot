@@ -42,7 +42,25 @@ impl PendingReviewChecker {
 
         let search: GithubSearchResult = resp.json().await?;
 
-        Ok(search.total_count)
+        let mut total = search.total_count;
+
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Avector-im%2Fsynapse-core")
+            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .header("User-Agent", "github-project-bot")
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
+
+        let search: GithubSearchResult = resp.json().await?;
+
+        total += search.total_count;
+
+        Ok(total)
     }
 
     async fn get_ps_column_count(&self) -> Result<i64, Error> {
