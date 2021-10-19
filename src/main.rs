@@ -5,16 +5,23 @@ extern crate serde_derive;
 
 use std::{env, time::Duration};
 
+use actix_web::{error::ErrorInternalServerError, get, web::Data, App, HttpServer};
 use anyhow::{bail, Error};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_tracing::TracingMiddleware;
+
+use tracing::{info, Instrument};
+use tracing_actix_web::TracingLogger;
+use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 #[derive(Deserialize, Debug, Clone)]
 struct GithubSearchResult {
     total_count: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct PendingReviewChecker {
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
     matrix_server_url: String,
     matrix_token: String,
     github_username: String,
@@ -26,7 +33,6 @@ impl PendingReviewChecker {
         let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
-            .header("User-Agent", "github-project-bot")
             .send().await?;
 
         if !resp.status().is_success() {
@@ -42,7 +48,6 @@ impl PendingReviewChecker {
         let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Avector-im%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
-            .header("User-Agent", "github-project-bot")
             .send().await?;
 
         if !resp.status().is_success() {
@@ -64,7 +69,6 @@ impl PendingReviewChecker {
             .get("https://api.github.com/projects/columns/13411398/cards")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
-            .header("User-Agent", "github-project-bot")
             .send()
             .await?;
 
@@ -88,7 +92,7 @@ impl PendingReviewChecker {
             "normal"
         };
 
-        self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_reviews", self.matrix_server_url))
+        let resp = self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_reviews", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "title": "Pending reviews",
@@ -98,7 +102,13 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
-        self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks", self.matrix_server_url))
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from MX: {}, text: {}", status, text);
+        }
+
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "title": "Urgent PS Tasks Column",
@@ -108,14 +118,20 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from MX: {}, text: {}", status, text);
+        }
+
         Ok(())
     }
 
-    async fn do_check_inner(&self) -> Result<(), Error> {
+    async fn do_check(&self) -> Result<(), Error> {
         let review_count = self.get_review_count().await?;
         let ps_column_count = self.get_ps_column_count().await?;
 
-        println!(
+        info!(
             "There are {} pending reviews and {} in ps column",
             review_count, ps_column_count
         );
@@ -124,15 +140,39 @@ impl PendingReviewChecker {
 
         Ok(())
     }
-
-    pub async fn do_check(&self) {
-        self.do_check_inner().await.unwrap()
-    }
 }
 
-#[tokio::main]
+#[get("/health")]
+async fn health() -> &'static str {
+    "OK"
+}
+
+#[get("/webhook")]
+async fn webhook(checker: Data<PendingReviewChecker>) -> Result<&'static str, actix_web::Error> {
+    checker.do_check().await.map_err(ErrorInternalServerError)?;
+
+    Ok("OK")
+}
+
+#[actix_web::main]
 async fn main() -> Result<(), std::io::Error> {
-    let client = reqwest::Client::new();
+    let format = tracing_subscriber::fmt::format();
+    let filter = EnvFilter::from_default_env();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .event_format(format)
+        .with_span_events(FmtSpan::CLOSE)
+        .init();
+
+    let client = ClientBuilder::new(
+        reqwest::Client::builder()
+            .user_agent("github-project-bot")
+            .build()
+            .unwrap(),
+    )
+    .with(TracingMiddleware)
+    .build();
 
     let mut matrix_server_url = env::var("MX_URL").expect("valid mx url");
     let matrix_token = env::var("MX_TOKEN").expect("valid mx token");
@@ -149,9 +189,26 @@ async fn main() -> Result<(), std::io::Error> {
         github_token,
     };
 
-    let mut interval = tokio::time::interval(Duration::from_secs(30));
-    loop {
-        checker.do_check().await;
-        interval.tick().await;
-    }
+    let c = checker.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            c.do_check()
+                .instrument(tracing::info_span!("loop_iteration"))
+                .await
+                .ok();
+            interval.tick().await;
+        }
+    });
+
+    HttpServer::new(move || {
+        App::new()
+            .app_data(Data::new(checker.clone()))
+            .wrap(TracingLogger::default())
+            .service(health)
+            .service(webhook)
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
