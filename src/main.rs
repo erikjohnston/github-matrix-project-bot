@@ -15,6 +15,7 @@ struct GithubSearchResult {
 #[derive(Debug, Clone)]
 struct PendingReviewChecker {
     client: reqwest::Client,
+    matrix_server_url: String,
     matrix_token: String,
     github_username: String,
     github_token: String,
@@ -87,7 +88,7 @@ impl PendingReviewChecker {
             "normal"
         };
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_reviews")
+        self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_reviews", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "title": "Pending reviews",
@@ -97,7 +98,7 @@ impl PendingReviewChecker {
             }))
             .send().await?;
 
-        self.client.put("https://jki.re/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks")
+        self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "title": "Urgent PS Tasks Column",
@@ -133,12 +134,16 @@ impl PendingReviewChecker {
 async fn main() -> Result<(), std::io::Error> {
     let client = reqwest::Client::new();
 
+    let mut matrix_server_url = env::var("MX_URL").expect("valid mx url");
     let matrix_token = env::var("MX_TOKEN").expect("valid mx token");
     let github_username = env::var("GH_USER").expect("valid gh username");
     let github_token = env::var("GH_TOKEN").expect("valid gh token");
 
+    matrix_server_url = matrix_server_url.trim_end_matches('/').to_string();
+
     let checker = PendingReviewChecker {
         client,
+        matrix_server_url,
         matrix_token,
         github_username,
         github_token,
