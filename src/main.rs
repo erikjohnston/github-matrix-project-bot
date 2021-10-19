@@ -5,7 +5,7 @@ extern crate serde_derive;
 
 use std::{env, time::Duration};
 
-use actix_web::{error::ErrorInternalServerError, get, web::Data, App, HttpServer};
+use actix_web::{error::ErrorInternalServerError, get, route, web::Data, App, HttpServer};
 use anyhow::{bail, Error};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
@@ -147,7 +147,7 @@ async fn health() -> &'static str {
     "OK"
 }
 
-#[get("/webhook")]
+#[route("/webhook", method = "GET", method = "POST")]
 async fn webhook(checker: Data<PendingReviewChecker>) -> Result<&'static str, actix_web::Error> {
     checker.do_check().await.map_err(ErrorInternalServerError)?;
 
