@@ -3,12 +3,9 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use anyhow::{bail, Error};
-
-const GH_TOKEN: &str = include_str!("../gh.token");
-const MX_TOKEN: &str = include_str!("../mx.token");
 
 #[derive(Deserialize, Debug, Clone)]
 struct GithubSearchResult {
@@ -18,18 +15,15 @@ struct GithubSearchResult {
 #[derive(Debug, Clone)]
 struct PendingReviewChecker {
     client: reqwest::Client,
+    matrix_token: String,
+    github_username: String,
+    github_token: String,
 }
 
 impl PendingReviewChecker {
-    pub fn new() -> PendingReviewChecker {
-        PendingReviewChecker {
-            client: reqwest::Client::new(),
-        }
-    }
-
     async fn get_review_count(&self) -> Result<i64, Error> {
         let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
-            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .header("User-Agent", "github-project-bot")
             .send().await?;
@@ -45,7 +39,7 @@ impl PendingReviewChecker {
         let mut total = search.total_count;
 
         let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Avector-im%2Fsynapse-core")
-            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .header("User-Agent", "github-project-bot")
             .send().await?;
@@ -67,7 +61,7 @@ impl PendingReviewChecker {
         let resp = self
             .client
             .get("https://api.github.com/projects/columns/13411398/cards")
-            .basic_auth("erikjohnston", Some(GH_TOKEN.trim()))
+            .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .header("User-Agent", "github-project-bot")
             .send()
@@ -94,7 +88,7 @@ impl PendingReviewChecker {
         };
 
         self.client.put("https://jki.re/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_reviews")
-            .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
+            .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "title": "Pending reviews",
                 "value": review_count,
@@ -104,7 +98,7 @@ impl PendingReviewChecker {
             .send().await?;
 
         self.client.put("https://jki.re/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks")
-            .header("Authorization", format!("Bearer {}", MX_TOKEN.trim()))
+            .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "title": "Urgent PS Tasks Column",
                 "value": ps_column_count,
@@ -137,36 +131,22 @@ impl PendingReviewChecker {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    let checker = PendingReviewChecker::new();
+    let client = reqwest::Client::new();
 
-    let c = checker.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            c.do_check().await;
-            interval.tick().await;
-        }
-    });
+    let matrix_token = env::var("MX_TOKEN").expect("valid mx token");
+    let github_username = env::var("GH_USER").expect("valid gh username");
+    let github_token = env::var("GH_TOKEN").expect("valid gh token");
 
-    let make_service = hyper::service::make_service_fn(move |_| {
-        let checker = checker.clone();
-        async move {
-            Ok::<_, hyper::Error>(hyper::service::service_fn(move |_req| {
-                let checker = checker.clone();
-                async move {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                    checker.do_check().await;
-                    Ok::<_, hyper::Error>(hyper::Response::new(hyper::Body::from("Done")))
-                }
-            }))
-        }
-    });
+    let checker = PendingReviewChecker {
+        client,
+        matrix_token,
+        github_username,
+        github_token,
+    };
 
-    // Then bind and serve...
-    hyper::Server::bind(&"127.0.0.1:8088".parse().unwrap())
-        .serve(make_service)
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-    Ok(())
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    loop {
+        checker.do_check().await;
+        interval.tick().await;
+    }
 }
