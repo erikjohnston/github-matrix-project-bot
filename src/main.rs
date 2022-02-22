@@ -85,7 +85,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_untriaged_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A>%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Amatrix-org/synapse")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -170,8 +170,8 @@ impl PendingReviewChecker {
         let untriaged_count = self.get_untriaged_count().await?;
 
         info!(
-            "There are {} pending reviews and {} in ps column",
-            review_count, ps_column_count
+            "There are {} pending reviews, {} in ps column and {} untriaged",
+            review_count, ps_column_count, untriaged_count,
         );
 
         self.update_state(review_count, ps_column_count, untriaged_count)

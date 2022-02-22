@@ -2,7 +2,7 @@
 authors = ["Erik Johnston"]
 edition = "2018"
 name = "github-matrix-project"
-version = "0.2.6"
+version = "0.2.7"
 
 [dependencies]
 serde = "1.0.136"
