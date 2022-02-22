@@ -12,7 +12,6 @@ use reqwest_tracing::TracingMiddleware;
 
 use tracing::{info, Instrument};
 use tracing_actix_web::TracingLogger;
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 #[derive(Deserialize, Debug, Clone)]
 struct GithubSearchResult {
@@ -85,7 +84,29 @@ impl PendingReviewChecker {
         Ok(cards.len() as i64)
     }
 
-    async fn update_state(&self, review_count: i64, ps_column_count: i64) -> Result<(), Error> {
+    async fn get_untriaged_count(&self) -> Result<i64, Error> {
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A>%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info")
+            .basic_auth(&self.github_username, Some(&self.github_token))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
+
+        let search: GithubSearchResult = resp.json().await?;
+
+        Ok(search.total_count)
+    }
+
+    async fn update_state(
+        &self,
+        review_count: i64,
+        ps_column_count: i64,
+        untriaged_count: i64,
+    ) -> Result<(), Error> {
         let severity = if review_count > 0 {
             "warning"
         } else {
@@ -124,19 +145,37 @@ impl PendingReviewChecker {
             bail!("Got non-200 from MX: {}, text: {}", status, text);
         }
 
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_untriaged", self.matrix_server_url))
+            .header("Authorization", format!("Bearer {}", self.matrix_token))
+            .json(&json!({
+                "title": "Untriaged Synapse issues",
+                "value": untriaged_count,
+                "severity": "normal",
+                "link": "https://github.com/matrix-org/synapse/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info",
+            }))
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from MX: {}, text: {}", status, text);
+        }
+
         Ok(())
     }
 
     async fn do_check(&self) -> Result<(), Error> {
         let review_count = self.get_review_count().await?;
         let ps_column_count = self.get_ps_column_count().await?;
+        let untriaged_count = self.get_untriaged_count().await?;
 
         info!(
             "There are {} pending reviews and {} in ps column",
             review_count, ps_column_count
         );
 
-        self.update_state(review_count, ps_column_count).await?;
+        self.update_state(review_count, ps_column_count, untriaged_count)
+            .await?;
 
         Ok(())
     }
@@ -156,14 +195,7 @@ async fn webhook(checker: Data<PendingReviewChecker>) -> Result<&'static str, ac
 
 #[actix_web::main]
 async fn main() -> Result<(), std::io::Error> {
-    let format = tracing_subscriber::fmt::format();
-    let filter = EnvFilter::from_default_env();
-
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .event_format(format)
-        .with_span_events(FmtSpan::CLOSE)
-        .init();
+    tracing_subscriber::fmt::init();
 
     let client = ClientBuilder::new(
         reqwest::Client::builder()
