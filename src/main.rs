@@ -101,11 +101,29 @@ impl PendingReviewChecker {
         Ok(search.total_count)
     }
 
+    async fn get_release_blocker_count(&self) -> Result<i64, Error> {
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen+label%3AX-Release-Blocker+repo%3Amatrix-org/synapse")
+            .basic_auth(&self.github_username, Some(&self.github_token))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
+
+        let search: GithubSearchResult = resp.json().await?;
+
+        Ok(search.total_count)
+    }
+
     async fn update_state(
         &self,
         review_count: i64,
         ps_column_count: i64,
         untriaged_count: i64,
+        release_blocker_count: i64,
     ) -> Result<(), Error> {
         let severity = if review_count > 0 {
             "warning"
@@ -161,6 +179,28 @@ impl PendingReviewChecker {
             bail!("Got non-200 from MX: {}, text: {}", status, text);
         }
 
+        let release_blocker_body = if release_blocker_count > 0 {
+            json!({
+                "title": "Synapse Release Blockers",
+                "value": release_blocker_count,
+                "severity": "alert",
+                "link": "https://github.com/matrix-org/synapse/labels/X-Release-Blocker",
+            })
+        } else {
+            json!({})
+        };
+
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/release_blockers", self.matrix_server_url))
+            .header("Authorization", format!("Bearer {}", self.matrix_token))
+            .json(&release_blocker_body)
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from MX: {}, text: {}", status, text);
+        }
+
         Ok(())
     }
 
@@ -168,14 +208,20 @@ impl PendingReviewChecker {
         let review_count = self.get_review_count().await?;
         let ps_column_count = self.get_ps_column_count().await?;
         let untriaged_count = self.get_untriaged_count().await?;
+        let release_blocker_count = self.get_release_blocker_count().await?;
 
         info!(
-            "There are {} pending reviews, {} in ps column and {} untriaged",
-            review_count, ps_column_count, untriaged_count,
+            "There are {} pending reviews, {} in ps column, {} untriaged and {} release blockers",
+            review_count, ps_column_count, untriaged_count, release_blocker_count,
         );
 
-        self.update_state(review_count, ps_column_count, untriaged_count)
-            .await?;
+        self.update_state(
+            review_count,
+            ps_column_count,
+            untriaged_count,
+            release_blocker_count,
+        )
+        .await?;
 
         Ok(())
     }
