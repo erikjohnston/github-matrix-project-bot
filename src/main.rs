@@ -62,28 +62,6 @@ impl PendingReviewChecker {
         Ok(total)
     }
 
-    async fn get_ps_column_count(&self) -> Result<i64, Error> {
-        let resp = self
-            .client
-            .get("https://api.github.com/projects/columns/13411398/cards")
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await?;
-            bail!("Got non-200 from GH: {}, text: {}", status, text);
-        }
-
-        let resp: serde_json::Value = resp.json().await?;
-
-        let cards: Vec<serde_json::Value> = serde_json::from_value(resp)?;
-
-        Ok(cards.len() as i64)
-    }
-
     async fn get_untriaged_count(&self) -> Result<i64, Error> {
         let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Amatrix-org/synapse")
             .basic_auth(&self.github_username, Some(&self.github_token))
@@ -121,7 +99,6 @@ impl PendingReviewChecker {
     async fn update_state(
         &self,
         review_count: i64,
-        ps_column_count: i64,
         untriaged_count: i64,
         release_blocker_count: i64,
     ) -> Result<(), Error> {
@@ -138,22 +115,6 @@ impl PendingReviewChecker {
                 "value": review_count,
                 "severity": severity,
                 "link": "https://github.com/pulls/review-requested",
-            }))
-            .send().await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await?;
-            bail!("Got non-200 from MX: {}, text: {}", status, text);
-        }
-
-        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/state/re.jki.counter/gh_ps_asks", self.matrix_server_url))
-            .header("Authorization", format!("Bearer {}", self.matrix_token))
-            .json(&json!({
-                "title": "Urgent PS Tasks Column",
-                "value": ps_column_count,
-                "severity": if ps_column_count > 0 {"warning"} else { "normal"},
-                "link": "https://github.com/orgs/matrix-org/projects/36#column-13411398",
             }))
             .send().await?;
 
@@ -206,22 +167,16 @@ impl PendingReviewChecker {
 
     async fn do_check(&self) -> Result<(), Error> {
         let review_count = self.get_review_count().await?;
-        let ps_column_count = self.get_ps_column_count().await?;
         let untriaged_count = self.get_untriaged_count().await?;
         let release_blocker_count = self.get_release_blocker_count().await?;
 
         info!(
-            "There are {} pending reviews, {} in ps column, {} untriaged and {} release blockers",
-            review_count, ps_column_count, untriaged_count, release_blocker_count,
+            "There are {} pending reviews, {} untriaged and {} release blockers",
+            review_count, untriaged_count, release_blocker_count,
         );
 
-        self.update_state(
-            review_count,
-            ps_column_count,
-            untriaged_count,
-            release_blocker_count,
-        )
-        .await?;
+        self.update_state(review_count, untriaged_count, release_blocker_count)
+            .await?;
 
         Ok(())
     }
