@@ -206,8 +206,8 @@ impl PendingReviewChecker {
         let spec_clarification_closed_count = self.get_spec_clarification_closed_count().await?;
 
         info!(
-            "There are {} pending reviews, {} untriaged and {} release blockers",
-            review_count, untriaged_count, release_blocker_count,
+            "There are {} pending reviews, {} untriaged, {} release blockers and {} closed clarifications",
+            review_count, untriaged_count, release_blocker_count, spec_clarification_closed_count,
         );
 
         self.update_state(
