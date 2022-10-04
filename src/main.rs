@@ -183,7 +183,7 @@ impl PendingReviewChecker {
         let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!wugGGUJDONpiDufANH:matrix.org/state/re.jki.counter/clarifications_closed", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
-                "title": "Synapse Release Blockers",
+                "title": "Spec clarifications closed",
                 "value": spec_clarification_closed_count,
                 "severity": "normal",
                 "link": "https://github.com/matrix-org/matrix-spec/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A%3E2022-10-01",
