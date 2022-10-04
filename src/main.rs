@@ -96,11 +96,29 @@ impl PendingReviewChecker {
         Ok(search.total_count)
     }
 
+    async fn get_spec_clarification_closed_count(&self) -> Result<i64, Error> {
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A>2022-10-01+repo%3Amatrix-org/matrix-spec")
+            .basic_auth(&self.github_username, Some(&self.github_token))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
+
+        let search: GithubSearchResult = resp.json().await?;
+
+        Ok(search.total_count)
+    }
+
     async fn update_state(
         &self,
         review_count: i64,
         untriaged_count: i64,
         release_blocker_count: i64,
+        spec_clarification_closed_count: i64,
     ) -> Result<(), Error> {
         let severity = if review_count > 0 {
             "warning"
@@ -162,6 +180,22 @@ impl PendingReviewChecker {
             bail!("Got non-200 from MX: {}, text: {}", status, text);
         }
 
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!wugGGUJDONpiDufANH:matrix.org/state/re.jki.counter/clarifications_closed", self.matrix_server_url))
+            .header("Authorization", format!("Bearer {}", self.matrix_token))
+            .json(&json!({
+                "title": "Synapse Release Blockers",
+                "value": spec_clarification_closed_count,
+                "severity": "normal",
+                "link": "https://github.com/matrix-org/matrix-spec/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A%3E2022-10-01",
+            }))
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from MX: {}, text: {}", status, text);
+        }
+
         Ok(())
     }
 
@@ -169,14 +203,20 @@ impl PendingReviewChecker {
         let review_count = self.get_review_count().await?;
         let untriaged_count = self.get_untriaged_count().await?;
         let release_blocker_count = self.get_release_blocker_count().await?;
+        let spec_clarification_closed_count = self.get_spec_clarification_closed_count().await?;
 
         info!(
             "There are {} pending reviews, {} untriaged and {} release blockers",
             review_count, untriaged_count, release_blocker_count,
         );
 
-        self.update_state(review_count, untriaged_count, release_blocker_count)
-            .await?;
+        self.update_state(
+            review_count,
+            untriaged_count,
+            release_blocker_count,
+            spec_clarification_closed_count,
+        )
+        .await?;
 
         Ok(())
     }
