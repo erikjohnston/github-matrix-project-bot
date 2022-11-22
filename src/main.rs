@@ -97,7 +97,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_spec_clarification_closed_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A>2022-10-01+repo%3Amatrix-org/matrix-spec")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A>2022-11-21+repo%3Amatrix-org/matrix-spec")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
