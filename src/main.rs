@@ -186,7 +186,7 @@ impl PendingReviewChecker {
                 "title": "Spec clarifications closed",
                 "value": spec_clarification_closed_count,
                 "severity": "normal",
-                "link": "https://github.com/matrix-org/matrix-spec/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A%3E2022-10-01",
+                "link": "https://github.com/matrix-org/matrix-spec/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A%3E2022-11-21",
             }))
             .send().await?;
 
