@@ -224,9 +224,9 @@ impl PendingReviewChecker {
         let now = Utc::now().with_timezone(&tz);
         let update_time = now
             .clone()
-            .with_hour(13)
+            .with_hour(9)
             .expect("valid hour")
-            .with_minute(28)
+            .with_minute(55)
             .expect("valid minute")
             .with_second(0)
             .expect("valid second")
