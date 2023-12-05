@@ -258,7 +258,7 @@ impl PendingReviewChecker {
         }
 
         let txn_id = now.timestamp_millis();
-        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!ZCDuxCcfyrCnkGsQQP:jki.re/send/m.room.message/{txn_id}", self.matrix_server_url))
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/send/m.room.message/{txn_id}", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "body": body,
