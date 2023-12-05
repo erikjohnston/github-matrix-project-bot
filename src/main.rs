@@ -224,10 +224,14 @@ impl PendingReviewChecker {
         let now = Utc::now().with_timezone(&tz);
         let update_time = now
             .clone()
-            .with_hour(9)
+            .with_hour(13)
             .expect("valid hour")
-            .with_minute(55)
-            .expect("valid minute");
+            .with_minute(28)
+            .expect("valid minute")
+            .with_second(0)
+            .expect("valid second")
+            .with_nanosecond(0)
+            .expect("valid nanosecond");
 
         if !(last_posted_daily_update < update_time && update_time < now) {
             return Ok(());
@@ -254,7 +258,7 @@ impl PendingReviewChecker {
         }
 
         let txn_id = now.timestamp_millis();
-        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!wugGGUJDONpiDufANH:matrix.org/send/m.room.message/{txn_id}", self.matrix_server_url))
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!ZCDuxCcfyrCnkGsQQP:jki.re/send/m.room.message/{txn_id}", self.matrix_server_url))
             .header("Authorization", format!("Bearer {}", self.matrix_token))
             .json(&json!({
                 "body": body,
