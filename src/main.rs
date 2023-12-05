@@ -3,10 +3,15 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-use std::{env, time::Duration};
+use std::{
+    env,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use actix_web::{error::ErrorInternalServerError, get, route, web::Data, App, HttpServer};
 use anyhow::{bail, Error};
+use chrono::{Timelike, Utc};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
 
@@ -25,6 +30,10 @@ struct PendingReviewChecker {
     matrix_token: String,
     github_username: String,
     github_token: String,
+
+    // Last time we posted the daily update. Used to decide if we should post
+    // another one at any given point.
+    last_posted_daily_update: Arc<Mutex<chrono::DateTime<tzfile::ArcTz>>>,
 }
 
 impl PendingReviewChecker {
@@ -199,6 +208,75 @@ impl PendingReviewChecker {
         Ok(())
     }
 
+    async fn maybe_send_daily_udpate(
+        &self,
+        review_count: i64,
+        release_blocker_count: i64,
+    ) -> Result<(), Error> {
+        let last_posted_daily_update = self
+            .last_posted_daily_update
+            .lock()
+            .expect("poisoned")
+            .clone();
+
+        let tz = last_posted_daily_update.timezone();
+
+        let now = Utc::now().with_timezone(&tz);
+        let update_time = now
+            .clone()
+            .with_hour(9)
+            .expect("valid hour")
+            .with_minute(55)
+            .expect("valid minute");
+
+        if !(last_posted_daily_update < update_time && update_time < now) {
+            return Ok(());
+        }
+
+        let mut body = format!(
+            "Pending reviews: {review_count}\nSynapse Release Blockers: {release_blocker_count}"
+        );
+        let mut formatted_body = if review_count > 0 {
+            format!(
+                r#"<strong><a href="https://github.com/pulls/review-requested"><font color="orange">Pending reviews: {review_count}</font></a></strong>"#
+            )
+        } else {
+            format!(r#"Pending reviews: {review_count}"#)
+        };
+
+        if release_blocker_count > 0 {
+            body.push_str("\nSynapse Release Blockers: ");
+            body.push_str(&release_blocker_count.to_string());
+
+            formatted_body.push_str(&format!(
+                r#"<br><strong><a href="https://github.com/matrix-org/synapse/labels/X-Release-Blocker"><font color="red">nSynapse Release Blockers: {release_blocker_count}</font></a></strong>"#
+            ))
+        }
+
+        let txn_id = now.timestamp_millis();
+        let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!wugGGUJDONpiDufANH:matrix.org/send/m.room.message/{txn_id}", self.matrix_server_url))
+            .header("Authorization", format!("Bearer {}", self.matrix_token))
+            .json(&json!({
+                "body": body,
+                "msgtype": "m.text",
+                "format": "org.matrix.custom.html",
+                "formatted_body": formatted_body,
+                "m.mentions": {},
+
+            }))
+            .send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from MX: {}, text: {}", status, text);
+        }
+
+        *self.last_posted_daily_update.lock().expect("poisoned") = now;
+
+        Ok(())
+    }
+
     async fn do_check(&self) -> Result<(), Error> {
         let review_count = self.get_review_count().await?;
         let untriaged_count = self.get_untriaged_count().await?;
@@ -209,6 +287,9 @@ impl PendingReviewChecker {
             "There are {} pending reviews, {} untriaged, {} release blockers and {} closed clarifications",
             review_count, untriaged_count, release_blocker_count, spec_clarification_closed_count,
         );
+
+        self.maybe_send_daily_udpate(review_count, release_blocker_count)
+            .await?;
 
         self.update_state(
             review_count,
@@ -254,12 +335,17 @@ async fn main() -> Result<(), std::io::Error> {
 
     matrix_server_url = matrix_server_url.trim_end_matches('/').to_string();
 
+    let tz = tzfile::ArcTz::named("Europe/London").expect("valid tz");
+
     let checker = PendingReviewChecker {
         client,
         matrix_server_url,
         matrix_token,
         github_username,
         github_token,
+
+        // Assume we've already posted today's update on startup.
+        last_posted_daily_update: Arc::new(Mutex::new(Utc::now().with_timezone(&tz))),
     };
 
     let c = checker.clone();
