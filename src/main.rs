@@ -38,7 +38,7 @@ struct PendingReviewChecker {
 
 impl PendingReviewChecker {
     async fn get_review_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Aelement-hq%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -53,7 +53,7 @@ impl PendingReviewChecker {
 
         let mut total = search.total_count;
 
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Avector-im%2Fsynapse-core")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Aelement-hq%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -89,7 +89,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_release_blocker_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen+label%3AX-Release-Blocker+repo%3Amatrix-org/synapse")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -157,7 +157,7 @@ impl PendingReviewChecker {
                 "title": "Untriaged Synapse issues",
                 "value": untriaged_count,
                 "severity": "normal",
-                "link": "https://github.com/matrix-org/synapse/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info",
+                "link": "https://github.com/element-hq/synapse/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info",
             }))
             .send().await?;
 
@@ -172,7 +172,7 @@ impl PendingReviewChecker {
                 "title": "Synapse Release Blockers",
                 "value": release_blocker_count,
                 "severity": "alert",
-                "link": "https://github.com/matrix-org/synapse/labels/X-Release-Blocker",
+                "link": "https://github.com/element-hq/synapse/labels/X-Release-Blocker",
             })
         } else {
             json!({})
