@@ -38,7 +38,7 @@ struct PendingReviewChecker {
 
 impl PendingReviewChecker {
     async fn get_review_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%matrix-org%2Fsynapse-core")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%2Fmatrix-org%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
