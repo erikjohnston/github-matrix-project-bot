@@ -253,7 +253,7 @@ impl PendingReviewChecker {
             body.push_str(&release_blocker_count.to_string());
 
             formatted_body.push_str(&format!(
-                r#"<br><strong><a href="https://github.com/element-hq/synapse/labels/X-Release-Blocker"><font color="red">nSynapse Release Blockers: {release_blocker_count}</font></a></strong>"#
+                r#"<br><strong><a href="https://github.com/element-hq/synapse/labels/X-Release-Blocker"><font color="red">Synapse Release Blockers: {release_blocker_count}</font></a></strong>"#
             ))
         }
 
