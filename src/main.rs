@@ -72,7 +72,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_untriaged_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Amatrix-org/synapse")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Aelement-hq/synapse")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -253,7 +253,7 @@ impl PendingReviewChecker {
             body.push_str(&release_blocker_count.to_string());
 
             formatted_body.push_str(&format!(
-                r#"<br><strong><a href="https://github.com/matrix-org/synapse/labels/X-Release-Blocker"><font color="red">nSynapse Release Blockers: {release_blocker_count}</font></a></strong>"#
+                r#"<br><strong><a href="https://github.com/element-hq/synapse/labels/X-Release-Blocker"><font color="red">Synapse Release Blockers: {release_blocker_count}</font></a></strong>"#
             ))
         }
 
