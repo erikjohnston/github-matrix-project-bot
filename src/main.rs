@@ -8,6 +8,7 @@ use std::{env, sync::Arc, time::Duration};
 use actix_web::{error::ErrorInternalServerError, get, route, web::Data, App, HttpServer};
 use anyhow::{bail, Error};
 use chrono::{Timelike, Utc};
+use itertools::Itertools;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
 use tokio::sync::Mutex;
@@ -27,6 +28,7 @@ struct PendingReviewChecker {
     matrix_token: String,
     github_username: String,
     github_token: String,
+    team_members: Option<Vec<String>>,
 
     // Last time we posted the daily update. Used to decide if we should post
     // another one at any given point.
@@ -100,6 +102,48 @@ impl PendingReviewChecker {
         let search: GithubSearchResult = resp.json().await?;
 
         Ok(search.total_count)
+    }
+
+    async fn get_team_pr_count(&self) -> Result<Option<i64>, Error> {
+        let Some(query) = self.get_team_pr_count_query() else {
+            return Ok(None);
+        };
+
+        let url = format!("https://api.github.com/search/issues?q={query}");
+
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.github_username, Some(&self.github_token))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
+
+        let search: GithubSearchResult = resp.json().await?;
+
+        Ok(Some(search.total_count))
+    }
+
+    fn get_team_pr_count_query(&self) -> Option<String> {
+        let team_members = match &self.team_members {
+            Some(team_members) => team_members,
+            None => return None,
+        };
+
+        let author_query = team_members
+            .iter()
+            .map(|t| format!("author%3A{t}"))
+            .join("+");
+
+        let full_query = format!("is%3Aopen+is%3Apr+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
+
+        Some(full_query)
     }
 
     #[allow(dead_code)]
@@ -195,6 +239,7 @@ impl PendingReviewChecker {
         &self,
         review_count: i64,
         release_blocker_count: i64,
+        team_pr_count: Option<i64>,
     ) -> Result<(), Error> {
         let mut last_posted_daily_update = self.last_posted_daily_update.lock().await;
 
@@ -216,25 +261,49 @@ impl PendingReviewChecker {
             return Ok(());
         }
 
-        let mut body = format!(
-            "Pending reviews: {review_count}\nSynapse Release Blockers: {release_blocker_count}"
-        );
-        let mut formatted_body = if review_count > 0 {
+        let mut plain_bodies = Vec::new();
+        let mut formatted_bodies = Vec::new();
+
+        plain_bodies.push(format!("Pending reviews: {review_count}"));
+        formatted_bodies.push(if review_count > 0 {
             format!(
                 r#"<strong><a href="https://github.com/pulls/review-requested"><font color="orange">Pending reviews: {review_count}</font></a></strong>"#
             )
         } else {
             format!(r#"Pending reviews: {review_count}"#)
-        };
+        });
+
+        if let Some(team_pr_count) = team_pr_count {
+            plain_bodies.push(format!("Team PRs awaiting review: {team_pr_count}"));
+
+            // This should never fail as we check for the presence of team members before calling this function.
+            let query = self
+                .get_team_pr_count_query()
+                .expect("team members were not present");
+            let url = format!("https://github.com/search?q={query}");
+
+            formatted_bodies.push(if team_pr_count > 0 {
+                format!(
+                    r#"<strong><a href="{url}"><font color="orange">Team PRs awaiting review: {team_pr_count}</font></a></strong>"#
+                )
+            } else {
+                format!(r#"Team PRs awaiting review: {team_pr_count}"#)
+            });
+        }
 
         if release_blocker_count > 0 {
-            body.push_str("\nSynapse Release Blockers: ");
-            body.push_str(&release_blocker_count.to_string());
+            plain_bodies.push(format!(
+                "Synapse Release Blockers: {}",
+                release_blocker_count
+            ));
 
-            formatted_body.push_str(&format!(
-                r#"<br><strong><a href="https://github.com/element-hq/synapse/labels/X-Release-Blocker"><font color="red">Synapse Release Blockers: {release_blocker_count}</font></a></strong>"#
-            ))
+            formatted_bodies.push(format!(
+                r#"<strong><a href="https://github.com/element-hq/synapse/labels/X-Release-Blocker"><font color="red">Synapse Release Blockers: {release_blocker_count}</font></a></strong>"#
+            ));
         }
+
+        let body = plain_bodies.join("\n");
+        let formatted_body = formatted_bodies.join("<br>");
 
         let txn_id = now.timestamp_millis();
         let resp =self.client.put(format!("{}/_matrix/client/r0/rooms/!SGNQGPGUwtcPBUotTL:matrix.org/send/m.room.message/{txn_id}", self.matrix_server_url))
@@ -264,14 +333,15 @@ impl PendingReviewChecker {
         let review_count = self.get_review_count().await?;
         let untriaged_count = self.get_untriaged_count().await?;
         let release_blocker_count = self.get_release_blocker_count().await?;
+        let team_pr_count = self.get_team_pr_count().await?;
         // let spec_clarification_closed_count = self.get_spec_clarification_closed_count().await?;
 
         info!(
-            "There are {} pending reviews, {} untriaged and {} release blockers",
-            review_count, untriaged_count, release_blocker_count,
+            "There are {} pending reviews, {} untriaged, {} release blockers and {} team PRs awaiting review",
+            review_count, untriaged_count, release_blocker_count, team_pr_count.unwrap_or(-1)
         );
 
-        self.maybe_send_daily_udpate(review_count, release_blocker_count)
+        self.maybe_send_daily_udpate(review_count, release_blocker_count, team_pr_count)
             .await?;
 
         // We don't render counters now
@@ -318,6 +388,25 @@ async fn main() -> Result<(), std::io::Error> {
     let github_username = env::var("GH_USER").expect("valid gh username");
     let github_token = env::var("GH_TOKEN").expect("valid gh token");
 
+    let team_member_str = env::var("TEAM_MEMBERS").ok();
+    let team_members = if let Some(team_member_str) = team_member_str {
+        let team_members: Vec<String> = team_member_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        if team_members.is_empty() {
+            info!("No team members specified");
+            None
+        } else {
+            info!("Team members: {:?}", team_members);
+            Some(team_members)
+        }
+    } else {
+        info!("No team members specified");
+        None
+    };
+
     matrix_server_url = matrix_server_url.trim_end_matches('/').to_string();
 
     let tz = tzfile::ArcTz::named("Europe/London").expect("valid tz");
@@ -328,6 +417,7 @@ async fn main() -> Result<(), std::io::Error> {
         matrix_token,
         github_username,
         github_token,
+        team_members,
 
         // Assume we've already posted today's update on startup.
         last_posted_daily_update: Arc::new(Mutex::new(Utc::now().with_timezone(&tz))),
