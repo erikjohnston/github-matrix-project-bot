@@ -21,6 +21,11 @@ struct GithubSearchResult {
     total_count: i64,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+struct GithubTeamMembersResultEntry {
+    login: String,
+}
+
 #[derive(Clone)]
 struct PendingReviewChecker {
     client: ClientWithMiddleware,
@@ -28,7 +33,7 @@ struct PendingReviewChecker {
     matrix_token: String,
     github_username: String,
     github_token: String,
-    team_members: Option<Vec<String>>,
+    github_team: Option<String>,
 
     // Last time we posted the daily update. Used to decide if we should post
     // another one at any given point.
@@ -104,11 +109,34 @@ impl PendingReviewChecker {
         Ok(search.total_count)
     }
 
-    async fn get_team_pr_count(&self) -> Result<Option<i64>, Error> {
-        let Some(query) = self.get_team_pr_count_query() else {
-            return Ok(None);
-        };
+    async fn get_team_members(&self, team: &str) -> Result<Vec<String>, Error> {
+        let (org, team) = team
+            .split_once('/')
+            .ok_or_else(|| anyhow::anyhow!("Invalid team name"))?;
 
+        let url = format!("https://api.github.com/orgs/{org}/teams/{team}/members");
+
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.github_username, Some(&self.github_token))
+            .header("Accept", "application/vnd.github.inertia-preview+json")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await?;
+            bail!("Got non-200 from GH: {}, text: {}", status, text);
+        }
+
+        let search: Vec<GithubTeamMembersResultEntry> = resp.json().await?;
+
+        Ok(search.into_iter().map(|entry| entry.login).collect())
+    }
+
+    async fn get_team_pr_count(&self, team_members: &[String]) -> Result<i64, Error> {
+        let query = self.get_team_pr_count_query(team_members);
         let url = format!("https://api.github.com/search/issues?q={query}");
 
         let resp = self
@@ -127,15 +155,10 @@ impl PendingReviewChecker {
 
         let search: GithubSearchResult = resp.json().await?;
 
-        Ok(Some(search.total_count))
+        Ok(search.total_count)
     }
 
-    fn get_team_pr_count_query(&self) -> Option<String> {
-        let team_members = match &self.team_members {
-            Some(team_members) => team_members,
-            None => return None,
-        };
-
+    fn get_team_pr_count_query(&self, team_members: &[String]) -> String {
         let author_query = team_members
             .iter()
             .map(|t| format!("author%3A{t}"))
@@ -143,7 +166,7 @@ impl PendingReviewChecker {
 
         let full_query = format!("is%3Aopen+is%3Apr+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
 
-        Some(full_query)
+        full_query
     }
 
     #[allow(dead_code)]
@@ -239,7 +262,7 @@ impl PendingReviewChecker {
         &self,
         review_count: i64,
         release_blocker_count: i64,
-        team_pr_count: Option<i64>,
+        team_pr_count: Option<(i64, Vec<String>)>,
     ) -> Result<(), Error> {
         let mut last_posted_daily_update = self.last_posted_daily_update.lock().await;
 
@@ -273,13 +296,11 @@ impl PendingReviewChecker {
             format!(r#"Pending reviews: {review_count}"#)
         });
 
-        if let Some(team_pr_count) = team_pr_count {
+        if let Some((team_pr_count, team_members)) = team_pr_count {
             plain_bodies.push(format!("Team PRs awaiting review: {team_pr_count}"));
 
             // This should never fail as we check for the presence of team members before calling this function.
-            let query = self
-                .get_team_pr_count_query()
-                .expect("team members were not present");
+            let query = self.get_team_pr_count_query(&team_members);
             let url = format!("https://github.com/search?q={query}");
 
             formatted_bodies.push(if team_pr_count > 0 {
@@ -333,15 +354,22 @@ impl PendingReviewChecker {
         let review_count = self.get_review_count().await?;
         let untriaged_count = self.get_untriaged_count().await?;
         let release_blocker_count = self.get_release_blocker_count().await?;
-        let team_pr_count = self.get_team_pr_count().await?;
         // let spec_clarification_closed_count = self.get_spec_clarification_closed_count().await?;
 
+        let team_result = if let Some(team) = &self.github_team {
+            let team_members = self.get_team_members(&team).await?;
+            Some((self.get_team_pr_count(&team_members).await?, team_members))
+        } else {
+            None
+        };
+
+        let team_pr_count = team_result.as_ref().map(|(count, _)| *count);
         info!(
             "There are {} pending reviews, {} untriaged, {} release blockers and {} team PRs awaiting review",
             review_count, untriaged_count, release_blocker_count, team_pr_count.unwrap_or(-1)
         );
 
-        self.maybe_send_daily_udpate(review_count, release_blocker_count, team_pr_count)
+        self.maybe_send_daily_udpate(review_count, release_blocker_count, team_result)
             .await?;
 
         // We don't render counters now
@@ -388,24 +416,7 @@ async fn main() -> Result<(), std::io::Error> {
     let github_username = env::var("GH_USER").expect("valid gh username");
     let github_token = env::var("GH_TOKEN").expect("valid gh token");
 
-    let team_member_str = env::var("GH_TEAM_MEMBERS").ok();
-    let team_members = if let Some(team_member_str) = team_member_str {
-        let team_members: Vec<String> = team_member_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
-
-        if team_members.is_empty() {
-            info!("No team members specified");
-            None
-        } else {
-            info!("Team members: {:?}", team_members);
-            Some(team_members)
-        }
-    } else {
-        info!("No team members specified");
-        None
-    };
+    let github_team = env::var("GH_TEAM").ok();
 
     matrix_server_url = matrix_server_url.trim_end_matches('/').to_string();
 
@@ -417,7 +428,7 @@ async fn main() -> Result<(), std::io::Error> {
         matrix_token,
         github_username,
         github_token,
-        team_members,
+        github_team,
 
         // Assume we've already posted today's update on startup.
         last_posted_daily_update: Arc::new(Mutex::new(Utc::now().with_timezone(&tz))),
