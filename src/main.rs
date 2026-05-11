@@ -388,7 +388,7 @@ async fn main() -> Result<(), std::io::Error> {
     let github_username = env::var("GH_USER").expect("valid gh username");
     let github_token = env::var("GH_TOKEN").expect("valid gh token");
 
-    let team_member_str = env::var("TEAM_MEMBERS").ok();
+    let team_member_str = env::var("GH_TEAM_MEMBERS").ok();
     let team_members = if let Some(team_member_str) = team_member_str {
         let team_members: Vec<String> = team_member_str
             .split(',')
