@@ -380,7 +380,7 @@ async fn main() -> Result<(), std::io::Error> {
             .build()
             .unwrap(),
     )
-    .with(TracingMiddleware)
+    .with(TracingMiddleware::default())
     .build();
 
     let mut matrix_server_url = env::var("MX_URL").expect("valid mx url");
