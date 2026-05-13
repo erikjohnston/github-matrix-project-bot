@@ -164,7 +164,7 @@ impl PendingReviewChecker {
             .map(|t| format!("author%3A{t}"))
             .join("+");
 
-        let full_query = format!("is%3Aopen+is%3Apr+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
+        let full_query = format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
 
         full_query
     }
