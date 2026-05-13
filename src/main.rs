@@ -42,7 +42,7 @@ struct PendingReviewChecker {
 
 impl PendingReviewChecker {
     async fn get_review_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%2Fmatrix-org%2Fsynapse-core")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20archived%3Afalse%20is%3Apr%20team-review-requested%2Fmatrix-org%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -57,7 +57,7 @@ impl PendingReviewChecker {
 
         let mut total = search.total_count;
 
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20team-review-requested%3Aelement-hq%2Fsynapse-core")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20archived%3Afalse%20team-review-requested%3Aelement-hq%2Fsynapse-core")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -76,7 +76,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_untriaged_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Aelement-hq/synapse")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+archived%3Afalse+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Aelement-hq/synapse")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -93,7 +93,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_release_blocker_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen+archived%3Afalse+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -164,14 +164,14 @@ impl PendingReviewChecker {
             .map(|t| format!("author%3A{t}"))
             .join("+");
 
-        let full_query = format!("is%3Aopen+is%3Apr+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
+        let full_query = format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
 
         full_query
     }
 
     #[allow(dead_code)]
     async fn get_spec_clarification_closed_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+label%3Aclarification+is%3Aclosed+closed%3A>2022-11-21+repo%3Amatrix-org/matrix-spec")
+        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+archived%3Afalse+label%3Aclarification+is%3Aclosed+closed%3A>2022-11-21+repo%3Amatrix-org/matrix-spec")
             .basic_auth(&self.github_username, Some(&self.github_token))
             .header("Accept", "application/vnd.github.inertia-preview+json")
             .send().await?;
@@ -223,7 +223,7 @@ impl PendingReviewChecker {
                 "title": "Untriaged Synapse issues",
                 "value": untriaged_count,
                 "severity": "normal",
-                "link": "https://github.com/element-hq/synapse/issues?q=is%3Aissue+is%3Aopen+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info",
+                "link": "https://github.com/element-hq/synapse/issues?q=is%3Aissue+is%3Aopen+archived%3Afalse+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info",
             }))
             .send().await?;
 
