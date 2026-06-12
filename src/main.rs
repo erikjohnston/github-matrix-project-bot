@@ -300,8 +300,10 @@ impl PendingReviewChecker {
             plain_bodies.push(format!("Team PRs awaiting review: {team_pr_count}"));
 
             // This should never fail as we check for the presence of team members before calling this function.
+            // We exclude the viewer's own PRs from the link (`@me` resolves to whoever
+            // clicks it), so it shows the PRs awaiting their review rather than their own.
             let query = self.get_team_pr_count_query(&team_members);
-            let url = format!("https://github.com/search?q={query}");
+            let url = format!("https://github.com/search?q={query}+-author%3A%40me");
 
             formatted_bodies.push(if team_pr_count > 0 {
                 format!(
