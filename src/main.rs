@@ -13,7 +13,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
 use tokio::sync::Mutex;
 
-use tracing::{info, Instrument};
+use tracing::{debug, info, Instrument};
 use tracing_actix_web::TracingLogger;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -60,7 +60,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_review_count(&self) -> Result<i64, Error> {
-        let resp = self.github_get("matrix-org", "https://api.github.com/search/issues?q=is%3Aopen%20archived%3Afalse%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")?
+        let resp = self.github_get("matrix-org", "https://api.github.com/search/issues?q=is%3Aopen%20archived%3Afalse%20is%3Apull-request%20team-review-requested%3Amatrix-org%2Fsynapse-core")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -73,7 +73,7 @@ impl PendingReviewChecker {
 
         let mut total = search.total_count;
 
-        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20archived%3Afalse%20team-review-requested%3Aelement-hq%2Fsynapse-core")?
+        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aopen%20is%3Apull-request%20archived%3Afalse%20team-review-requested%3Aelement-hq%2Fsynapse-core")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -105,7 +105,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_release_blocker_count(&self) -> Result<i64, Error> {
-        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aopen+archived%3Afalse+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")?
+        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+archived%3Afalse+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -156,6 +156,8 @@ impl PendingReviewChecker {
 
             let search: GithubSearchResult = resp.json().await?;
 
+            info!("Got {} team PRs for org {}", search.total_count, org);
+
             total += search.total_count;
         }
 
@@ -168,7 +170,7 @@ impl PendingReviewChecker {
             .map(|t| format!("author%3A{t}"))
             .join("+");
 
-        format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3A{org}%2Fsynapse-core+{author_query}")
+        format!("is%3Aopen+is%3Apull-request+archived%3Afalse+team-review-requested%3A{org}%2Fsynapse-core+{author_query}")
     }
 
     #[allow(dead_code)]
@@ -309,7 +311,7 @@ impl PendingReviewChecker {
                 .iter()
                 .map(|t| format!("author%3A{t}"))
                 .join("+");
-            let query = format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
+            let query = format!("is%3Aopen+is%3Apull-request+archived%3Afalse+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
             let url = format!("https://github.com/search?q={query}+-author%3A%40me");
 
             formatted_bodies.push(if team_pr_count > 0 {
@@ -456,10 +458,13 @@ async fn main() -> Result<(), std::io::Error> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
-            c.do_check()
+            if let Err(err) = c
+                .do_check()
                 .instrument(tracing::info_span!("loop_iteration"))
                 .await
-                .ok();
+            {
+                tracing::error!("Error during check: {:?}", err);
+            }
             interval.tick().await;
         }
     });
