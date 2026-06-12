@@ -3,7 +3,7 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-use std::{env, sync::Arc, time::Duration};
+use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use actix_web::{error::ErrorInternalServerError, get, route, web::Data, App, HttpServer};
 use anyhow::{bail, Error};
@@ -31,8 +31,7 @@ struct PendingReviewChecker {
     client: ClientWithMiddleware,
     matrix_server_url: String,
     matrix_token: String,
-    github_username: String,
-    github_token: String,
+    github_tokens: HashMap<String, String>,
     github_team: Option<String>,
 
     // Last time we posted the daily update. Used to decide if we should post
@@ -41,10 +40,27 @@ struct PendingReviewChecker {
 }
 
 impl PendingReviewChecker {
+    fn token_for(&self, org: &str) -> Result<&str, Error> {
+        self.github_tokens
+            .get(org)
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("No GitHub token configured for org '{org}'"))
+    }
+
+    fn github_get(
+        &self,
+        org: &str,
+        url: &str,
+    ) -> Result<reqwest_middleware::RequestBuilder, Error> {
+        Ok(self
+            .client
+            .get(url)
+            .bearer_auth(self.token_for(org)?)
+            .header("Accept", "application/vnd.github.inertia-preview+json"))
+    }
+
     async fn get_review_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20archived%3Afalse%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
+        let resp = self.github_get("matrix-org", "https://api.github.com/search/issues?q=is%3Aopen%20archived%3Afalse%20is%3Apr%20team-review-requested%3Amatrix-org%2Fsynapse-core")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -57,9 +73,7 @@ impl PendingReviewChecker {
 
         let mut total = search.total_count;
 
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20archived%3Afalse%20team-review-requested%3Aelement-hq%2Fsynapse-core")
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
+        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20archived%3Afalse%20team-review-requested%3Aelement-hq%2Fsynapse-core")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -76,9 +90,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_untriaged_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+archived%3Afalse+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Aelement-hq/synapse")
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
+        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aissue+is%3Aopen+archived%3Afalse+-label%3AT-Other++-label%3AT-Task+-label%3AT-Enhancement+-label%3AT-Defect+updated%3A%3E%3D2021-04-01+sort%3Aupdated-desc++-label%3AX-Needs-Info+repo%3Aelement-hq/synapse")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -93,9 +105,7 @@ impl PendingReviewChecker {
     }
 
     async fn get_release_blocker_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aopen+archived%3Afalse+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
+        let resp = self.github_get("element-hq", "https://api.github.com/search/issues?q=is%3Aopen+archived%3Afalse+label%3AX-Release-Blocker+repo%3Aelement-hq/synapse")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -116,13 +126,7 @@ impl PendingReviewChecker {
 
         let url = format!("https://api.github.com/orgs/{org}/teams/{team}/members");
 
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
-            .send()
-            .await?;
+        let resp = self.github_get(org, &url)?.send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -136,44 +140,40 @@ impl PendingReviewChecker {
     }
 
     async fn get_team_pr_count(&self, team_members: &[String]) -> Result<i64, Error> {
-        let query = self.get_team_pr_count_query(team_members);
-        let url = format!("https://api.github.com/search/issues?q={query}");
+        let mut total = 0;
 
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
-            .send()
-            .await?;
+        for org in ["matrix-org", "element-hq"] {
+            let query = self.get_team_pr_count_query(org, team_members);
+            let url = format!("https://api.github.com/search/issues?q={query}");
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await?;
-            bail!("Got non-200 from GH: {}, text: {}", status, text);
+            let resp = self.github_get(org, &url)?.send().await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await?;
+                bail!("Got non-200 from GH: {}, text: {}", status, text);
+            }
+
+            let search: GithubSearchResult = resp.json().await?;
+
+            total += search.total_count;
         }
 
-        let search: GithubSearchResult = resp.json().await?;
-
-        Ok(search.total_count)
+        Ok(total)
     }
 
-    fn get_team_pr_count_query(&self, team_members: &[String]) -> String {
+    fn get_team_pr_count_query(&self, org: &str, team_members: &[String]) -> String {
         let author_query = team_members
             .iter()
             .map(|t| format!("author%3A{t}"))
             .join("+");
 
-        let full_query = format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
-
-        full_query
+        format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3A{org}%2Fsynapse-core+{author_query}")
     }
 
     #[allow(dead_code)]
     async fn get_spec_clarification_closed_count(&self) -> Result<i64, Error> {
-        let resp = self.client.get("https://api.github.com/search/issues?q=is%3Aissue+archived%3Afalse+label%3Aclarification+is%3Aclosed+closed%3A>2022-11-21+repo%3Amatrix-org/matrix-spec")
-            .basic_auth(&self.github_username, Some(&self.github_token))
-            .header("Accept", "application/vnd.github.inertia-preview+json")
+        let resp = self.github_get("matrix-org", "https://api.github.com/search/issues?q=is%3Aissue+archived%3Afalse+label%3Aclarification+is%3Aclosed+closed%3A>2022-11-21+repo%3Amatrix-org/matrix-spec")?
             .send().await?;
 
         if !resp.status().is_success() {
@@ -302,7 +302,14 @@ impl PendingReviewChecker {
             // This should never fail as we check for the presence of team members before calling this function.
             // We exclude the viewer's own PRs from the link (`@me` resolves to whoever
             // clicks it), so it shows the PRs awaiting their review rather than their own.
-            let query = self.get_team_pr_count_query(&team_members);
+            // Build a combined cross-team search link for the human-facing UI. Unlike the
+            // token-scoped API queries, this is just a github.com link, so it can OR both
+            // teams in one search to show everything on a single page.
+            let author_query = team_members
+                .iter()
+                .map(|t| format!("author%3A{t}"))
+                .join("+");
+            let query = format!("is%3Aopen+is%3Apr+archived%3Afalse+team-review-requested%3Amatrix-org%2Fsynapse-core+team-review-requested%3Aelement-hq%2Fsynapse-core+{author_query}");
             let url = format!("https://github.com/search?q={query}+-author%3A%40me");
 
             formatted_bodies.push(if team_pr_count > 0 {
@@ -359,7 +366,7 @@ impl PendingReviewChecker {
         // let spec_clarification_closed_count = self.get_spec_clarification_closed_count().await?;
 
         let team_result = if let Some(team) = &self.github_team {
-            let team_members = self.get_team_members(&team).await?;
+            let team_members = self.get_team_members(team).await?;
             Some((self.get_team_pr_count(&team_members).await?, team_members))
         } else {
             None
@@ -415,8 +422,18 @@ async fn main() -> Result<(), std::io::Error> {
 
     let mut matrix_server_url = env::var("MX_URL").expect("valid mx url");
     let matrix_token = env::var("MX_TOKEN").expect("valid mx token");
-    let github_username = env::var("GH_USER").expect("valid gh username");
-    let github_token = env::var("GH_TOKEN").expect("valid gh token");
+
+    // Fine-grained GitHub tokens are scoped one-per-org, so we read one token per org we
+    // query and route each API call to the right one. Validate at startup so a missing
+    // token panics early rather than failing every check in the background loop.
+    const REQUIRED_ORGS: [&str; 2] = ["element-hq", "matrix-org"];
+    let mut github_tokens = HashMap::new();
+    for org in REQUIRED_ORGS {
+        let var = format!("GH_TOKEN_{}", org.to_uppercase().replace('-', "_"));
+        let tok =
+            env::var(&var).unwrap_or_else(|_| panic!("missing required token env var {}", var));
+        github_tokens.insert(org.to_string(), tok);
+    }
 
     let github_team = env::var("GH_TEAM").ok();
 
@@ -428,8 +445,7 @@ async fn main() -> Result<(), std::io::Error> {
         client,
         matrix_server_url,
         matrix_token,
-        github_username,
-        github_token,
+        github_tokens,
         github_team,
 
         // Assume we've already posted today's update on startup.
